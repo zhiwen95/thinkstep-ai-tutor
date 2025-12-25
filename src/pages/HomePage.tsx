@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Trash2, Brain, Loader2 } from 'lucide-react';
+import { Send, Trash2, Brain, Loader2, Image as ImageIcon, X, Paperclip } from 'lucide-react';
 import { chatService } from '@/lib/chat';
 import { Button } from '@/components/ui/button';
 import { SketchCard } from '@/components/ui/sketch-card';
 import { LessonSidebar } from '@/components/lesson-sidebar';
 import ReactMarkdown from 'react-markdown';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 import type { Message, ChatState } from '../../worker/types';
 export function HomePage() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -17,7 +18,10 @@ export function HomePage() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
+  const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     loadHistory();
   }, []);
@@ -33,28 +37,45 @@ export function HomePage() {
       setTutorState(res.data.tutorState);
     }
   };
+  const handleImageUpload = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please upload a valid image (JPG/PNG).');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Image size must be less than 5MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setPendingImage(e.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    if ((!input.trim() && !pendingImage) || isLoading) return;
     const userMsg = input;
+    const currentImage = pendingImage;
     setInput('');
+    setPendingImage(null);
     setIsLoading(true);
     setStreamingText('');
-    // Optimistic local update
     const tempUserMsg: Message = {
       id: crypto.randomUUID(),
       role: 'user',
       content: userMsg,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      attachments: currentImage ? [{ type: 'image', url: currentImage }] : undefined
     };
     setMessages(prev => [...prev, tempUserMsg]);
     try {
       await chatService.sendMessage(userMsg, undefined, (chunk) => {
         setStreamingText(prev => prev + chunk);
-      });
-      // After stream finishes, refresh final state
+      }, currentImage || undefined);
       await loadHistory();
     } catch (e) {
       console.error(e);
+      toast.error('Failed to send message.');
     } finally {
       setIsLoading(false);
       setStreamingText('');
@@ -66,7 +87,26 @@ export function HomePage() {
     setTutorState({ plan: [], currentStepIndex: 0, isLessonInitialized: false });
   };
   return (
-    <div className="flex h-screen bg-[#FDFBF7] text-[#2D3436] font-sans overflow-hidden">
+    <div 
+      className="flex h-screen bg-[#FDFBF7] text-[#2D3436] font-sans overflow-hidden"
+      onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+      onDragLeave={() => setIsDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setIsDragging(false);
+        const file = e.dataTransfer.files[0];
+        if (file) handleImageUpload(file);
+      }}
+    >
+      {/* Drag Overlay */}
+      {isDragging && (
+        <div className="absolute inset-0 z-50 bg-yellow-400/20 backdrop-blur-sm border-4 border-dashed border-black flex items-center justify-center">
+          <div className="bg-white p-8 border-2 border-black shadow-hard text-center rotate-2">
+            <ImageIcon className="w-16 h-16 mx-auto mb-4" />
+            <p className="text-2xl font-black">Drop to teach me!</p>
+          </div>
+        </div>
+      )}
       {/* Sidebar Area */}
       <aside className="hidden md:block w-80 lg:w-96 shrink-0 border-r-2 border-black bg-paper">
         <LessonSidebar steps={tutorState.plan} currentIndex={tutorState.currentStepIndex} />
@@ -85,17 +125,18 @@ export function HomePage() {
           </Button>
         </header>
         {/* Scrollable messages */}
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6 pb-32 scroll-smooth">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6 pb-40 scroll-smooth">
           {messages.length === 0 && (
             <div className="max-w-2xl mx-auto pt-20 text-center space-y-4">
               <h2 className="text-4xl font-black italic">What can I help you learn today?</h2>
-              <p className="font-hand text-xl text-ink-muted">Type any topic or problem, and we'll break it down together.</p>
+              <p className="font-hand text-xl text-ink-muted">Type a problem or upload a photo of your homework!</p>
             </div>
           )}
           {messages.map((m) => (
             <div key={m.id} className={cn("flex w-full", m.role === 'user' ? "justify-end" : "justify-start")}>
-              <SketchCard 
+              <SketchCard
                 variant={m.role === 'user' ? 'accent' : 'default'}
+                image={m.attachments?.[0]?.url}
                 className={cn(
                   "max-w-[85%] md:max-w-[70%]",
                   m.role === 'user' ? "-rotate-1" : "rotate-1"
@@ -127,28 +168,62 @@ export function HomePage() {
         </div>
         {/* Input Bar */}
         <div className="absolute bottom-0 left-0 right-0 p-4 md:p-6 bg-gradient-to-t from-paper via-paper/90 to-transparent">
-          <div className="max-w-4xl mx-auto flex gap-3">
-            <div className="relative flex-1">
-              <input 
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                placeholder="Ask your tutor anything..."
-                className="w-full p-4 border-2 border-black bg-white shadow-hard focus:outline-none focus:ring-2 focus:ring-yellow-400 text-lg transition-all"
-              />
-              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex gap-1">
-                <Button 
-                  onClick={handleSend}
-                  disabled={isLoading || !input.trim()}
-                  className="bg-black hover:bg-black/90 text-white rounded-none h-10 w-10 p-0 shadow-hard-sm"
-                >
-                  <Send className="w-4 h-4" />
-                </Button>
+          <div className="max-w-4xl mx-auto">
+            {/* Image Preview Area */}
+            {pendingImage && (
+              <div className="mb-4 flex justify-start">
+                <div className="relative p-2 bg-white border-2 border-black shadow-hard -rotate-2 group">
+                  <img src={pendingImage} alt="Preview" className="h-24 w-auto object-contain border border-black" />
+                  <button 
+                    onClick={() => setPendingImage(null)}
+                    className="absolute -top-2 -right-2 bg-red-500 text-white p-1 border-2 border-black rounded-full hover:scale-110 transition-transform"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="flex gap-3">
+              <div className="relative flex-1">
+                <input
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                  placeholder="Ask your tutor or upload a problem..."
+                  className="w-full p-4 pl-12 border-2 border-black bg-white shadow-hard focus:outline-none focus:ring-2 focus:ring-yellow-400 text-lg transition-all"
+                />
+                <div className="absolute left-3 top-1/2 -translate-y-1/2">
+                  <button 
+                    onClick={() => fileInputRef.current?.click()}
+                    className="p-1 hover:text-yellow-600 transition-colors"
+                  >
+                    <Paperclip className="w-5 h-5" />
+                  </button>
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    className="hidden" 
+                    accept="image/*" 
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleImageUpload(file);
+                    }} 
+                  />
+                </div>
+                <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                  <Button
+                    onClick={handleSend}
+                    disabled={isLoading || (!input.trim() && !pendingImage)}
+                    className="bg-black hover:bg-black/90 text-white rounded-none h-10 w-10 p-0 shadow-hard-sm"
+                  >
+                    <Send className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
           <p className="text-center text-[10px] text-ink-muted mt-4">
-            ThinkStep AI is a learning assistant. Please verify important facts. Limit on AI requests may apply.
+            ThinkStep AI is a learning assistant. Limit on AI requests may apply.
           </p>
         </div>
       </main>

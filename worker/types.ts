@@ -6,6 +6,11 @@ export interface Message {
   id: string;
   toolCalls?: ToolCall[];
   tool_call_id?: string;
+  attachments?: Attachment[];
+}
+export interface Attachment {
+  type: 'image';
+  url: string; // Base64 or URL
 }
 export interface ToolCall {
   id: string;

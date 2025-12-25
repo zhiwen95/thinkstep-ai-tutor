@@ -1,7 +1,6 @@
 import OpenAI from 'openai';
 import type { Message, ToolCall, ChatState } from './types';
 import { getToolDefinitions, executeTool } from './tools';
-import { ChatCompletionMessageFunctionToolCall } from 'openai/resources/index.mjs';
 export class ChatHandler {
   private client: OpenAI;
   private model: string;
@@ -19,7 +18,7 @@ export class ChatHandler {
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
     const messages = this.buildConversationMessages(message, state);
     const toolDefinitions = await getToolDefinitions();
-    const requestOptions = {
+    const requestOptions: any = {
       model: this.model,
       messages,
       tools: toolDefinitions,
@@ -28,10 +27,22 @@ export class ChatHandler {
     };
     if (onChunk) {
       const stream = await this.client.chat.completions.create({ ...requestOptions, stream: true });
-      return this.handleStreamResponse(stream, message, state.messages, onChunk);
+      return this.handleStreamResponse(stream, messages, onChunk);
     }
     const completion = await this.client.chat.completions.create({ ...requestOptions, stream: false });
-    return this.handleNonStreamResponse(completion, message, state.messages);
+    return this.handleNonStreamResponse(completion, messages);
+  }
+  private formatMessageContent(m: Message | { role: string, content: string, attachments?: any[] }) {
+    if (m.attachments && m.attachments.length > 0) {
+      const contentBlocks: any[] = [{ type: 'text', text: m.content }];
+      for (const attachment of m.attachments) {
+        if (attachment.type === 'image') {
+          contentBlocks.push({ type: 'image_url', image_url: { url: attachment.url } });
+        }
+      }
+      return contentBlocks;
+    }
+    return m.content;
   }
   private buildConversationMessages(userMessage: string, state: ChatState) {
     const { tutorState } = state;
@@ -39,28 +50,30 @@ export class ChatHandler {
     let systemPrompt = `You are ThinkStep, an expert Socratic Tutor.
 Your goal is to guide students through complex problems using a step-by-step Lesson Plan.
 CORE RULES:
-1. If no lesson plan exists, analyze the user's problem and call 'create_lesson_plan'.
+1. If no lesson plan exists, analyze the user's problem (and any provided images) and call 'create_lesson_plan'.
 2. Present only ONE step at a time. Do not dump the full solution.
 3. Be encouraging and ask "Checking Questions" to verify understanding.
 4. Only advance (call 'mark_step_complete') when the user demonstrates understanding of the current goal.
 5. If the user is confused, stay on the current step and try a different explanation.
+6. Acknowledge any diagrams or images the user provides.
 Current Lesson State:
 ${tutorState.isLessonInitialized ? `
 - Current Step: ${tutorState.currentStepIndex + 1} of ${tutorState.plan.length}
 - Current Goal: ${currentStep?.goal || 'N/A'}
 ` : '- No lesson plan created yet.'}`;
+    const history = state.messages.slice(-10).map(m => ({
+      role: m.role as any,
+      content: this.formatMessageContent(m),
+      ...(m.toolCalls && { tool_calls: m.toolCalls.map(tc => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.arguments) } })) }),
+      ...(m.tool_call_id && { tool_call_id: m.tool_call_id })
+    }));
     return [
       { role: 'system' as const, content: systemPrompt },
-      ...state.messages.slice(-10).map(m => ({
-        role: m.role as 'user' | 'assistant' | 'system' | 'tool',
-        content: m.content,
-        ...(m.toolCalls && { tool_calls: m.toolCalls }),
-        ...(m.tool_call_id && { tool_call_id: m.tool_call_id })
-      })),
+      ...history,
       { role: 'user' as const, content: userMessage }
     ];
   }
-  private async handleStreamResponse(stream: any, message: string, history: Message[], onChunk: any) {
+  private async handleStreamResponse(stream: any, history: any[], onChunk: any) {
     let fullContent = '';
     const accumulatedToolCalls: any[] = [];
     for await (const chunk of stream) {
@@ -79,16 +92,16 @@ ${tutorState.isLessonInitialized ? `
     }
     if (accumulatedToolCalls.length > 0) {
       const toolCalls = await this.executeToolCalls(accumulatedToolCalls);
-      const followUp = await this.generateToolResponse(message, history, accumulatedToolCalls, toolCalls);
+      const followUp = await this.generateToolResponse(history, accumulatedToolCalls, toolCalls);
       return { content: followUp, toolCalls };
     }
     return { content: fullContent };
   }
-  private async handleNonStreamResponse(completion: any, message: string, history: Message[]) {
+  private async handleNonStreamResponse(completion: any, history: any[]) {
     const resp = completion.choices[0]?.message;
     if (resp?.tool_calls) {
       const toolCalls = await this.executeToolCalls(resp.tool_calls);
-      const followUp = await this.generateToolResponse(message, history, resp.tool_calls, toolCalls);
+      const followUp = await this.generateToolResponse(history, resp.tool_calls, toolCalls);
       return { content: followUp, toolCalls };
     }
     return { content: resp?.content || '' };
@@ -100,11 +113,9 @@ ${tutorState.isLessonInitialized ? `
       return { id: tc.id, name: tc.function.name, arguments: args, result };
     }));
   }
-  private async generateToolResponse(userMessage: string, history: Message[], openAiToolCalls: any[], toolResults: ToolCall[]) {
+  private async generateToolResponse(history: any[], openAiToolCalls: any[], toolResults: ToolCall[]) {
     const messages: any[] = [
-      { role: 'system', content: 'You are ThinkStep. Now provide your pedagogical response based on the tool result.' },
-      ...history.slice(-5).map(m => ({ role: m.role, content: m.content })),
-      { role: 'user', content: userMessage },
+      ...history,
       { role: 'assistant', content: null, tool_calls: openAiToolCalls },
       ...toolResults.map(tr => ({ role: 'tool', content: JSON.stringify(tr.result), tool_call_id: tr.id }))
     ];
