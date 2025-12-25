@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import type { Message, ToolCall, ChatState } from './types';
+import type { Message, ToolCall, ChatState, Attachment } from './types';
 import { getToolDefinitions, executeTool } from './tools';
 export class ChatHandler {
   private client: OpenAI;
@@ -14,9 +14,10 @@ export class ChatHandler {
   async processMessage(
     message: string,
     state: ChatState,
-    onChunk?: (chunk: string) => void
+    onChunk?: (chunk: string) => void,
+    newAttachments?: Attachment[]
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
-    const messages = this.buildConversationMessages(message, state);
+    const messages = this.buildConversationMessages(message, state, newAttachments);
     const toolDefinitions = await getToolDefinitions();
     const requestOptions: any = {
       model: this.model,
@@ -32,9 +33,9 @@ export class ChatHandler {
     const completion = await this.client.chat.completions.create({ ...requestOptions, stream: false });
     return this.handleNonStreamResponse(completion, messages);
   }
-  private formatMessageContent(m: Message | { role: string, content: string, attachments?: any[] }) {
+  private formatMessageContent(m: { content: string; attachments?: Attachment[] }) {
     if (m.attachments && m.attachments.length > 0) {
-      const contentBlocks: any[] = [{ type: 'text', text: m.content }];
+      const contentBlocks: any[] = [{ type: 'text', text: m.content || 'Please look at this image.' }];
       for (const attachment of m.attachments) {
         if (attachment.type === 'image') {
           contentBlocks.push({ type: 'image_url', image_url: { url: attachment.url } });
@@ -44,10 +45,10 @@ export class ChatHandler {
     }
     return m.content;
   }
-  private buildConversationMessages(userMessage: string, state: ChatState) {
+  private buildConversationMessages(userMessage: string, state: ChatState, newAttachments?: Attachment[]) {
     const { tutorState } = state;
     const currentStep = tutorState.plan[tutorState.currentStepIndex];
-    let systemPrompt = `You are ThinkStep, an expert Socratic Tutor.
+    const systemPrompt = `You are ThinkStep, an expert Socratic Tutor.
 Your goal is to guide students through complex problems using a step-by-step Lesson Plan.
 CORE RULES:
 1. If no lesson plan exists, analyze the user's problem (and any provided images) and call 'create_lesson_plan'.
@@ -64,16 +65,26 @@ ${tutorState.isLessonInitialized ? `
     const history = state.messages.slice(-10).map(m => ({
       role: m.role as any,
       content: this.formatMessageContent(m),
-      ...(m.toolCalls && { tool_calls: m.toolCalls.map(tc => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.arguments) } })) }),
+      ...(m.toolCalls && { 
+        tool_calls: m.toolCalls.map(tc => ({ 
+          id: tc.id, 
+          type: 'function', 
+          function: { name: tc.name, arguments: JSON.stringify(tc.arguments) } 
+        })) 
+      }),
       ...(m.tool_call_id && { tool_call_id: m.tool_call_id })
     }));
+    const currentUserMsg = {
+      role: 'user' as const,
+      content: this.formatMessageContent({ content: userMessage, attachments: newAttachments })
+    };
     return [
       { role: 'system' as const, content: systemPrompt },
       ...history,
-      { role: 'user' as const, content: userMessage }
+      currentUserMsg
     ];
   }
-  private async handleStreamResponse(stream: any, history: any[], onChunk: any) {
+  private async handleStreamResponse(stream: any, history: any[], onChunk: (chunk: string) => void) {
     let fullContent = '';
     const accumulatedToolCalls: any[] = [];
     for await (const chunk of stream) {
@@ -84,25 +95,27 @@ ${tutorState.isLessonInitialized ? `
       }
       if (delta?.tool_calls) {
         for (const tc of delta.tool_calls) {
-          if (!accumulatedToolCalls[tc.index]) accumulatedToolCalls[tc.index] = { id: tc.id, function: { name: '', arguments: '' } };
+          if (!accumulatedToolCalls[tc.index]) {
+            accumulatedToolCalls[tc.index] = { id: tc.id, function: { name: '', arguments: '' } };
+          }
           if (tc.function?.name) accumulatedToolCalls[tc.index].function.name += tc.function.name;
           if (tc.function?.arguments) accumulatedToolCalls[tc.index].function.arguments += tc.function.arguments;
         }
       }
     }
     if (accumulatedToolCalls.length > 0) {
-      const toolCalls = await this.executeToolCalls(accumulatedToolCalls);
-      const followUp = await this.generateToolResponse(history, accumulatedToolCalls, toolCalls);
-      return { content: followUp, toolCalls };
+      const toolResults = await this.executeToolCalls(accumulatedToolCalls);
+      const followUp = await this.generateToolResponse(history, accumulatedToolCalls, toolResults);
+      return { content: followUp, toolCalls: toolResults };
     }
     return { content: fullContent };
   }
   private async handleNonStreamResponse(completion: any, history: any[]) {
     const resp = completion.choices[0]?.message;
     if (resp?.tool_calls) {
-      const toolCalls = await this.executeToolCalls(resp.tool_calls);
-      const followUp = await this.generateToolResponse(history, resp.tool_calls, toolCalls);
-      return { content: followUp, toolCalls };
+      const toolResults = await this.executeToolCalls(resp.tool_calls);
+      const followUp = await this.generateToolResponse(history, resp.tool_calls, toolResults);
+      return { content: followUp, toolCalls: toolResults };
     }
     return { content: resp?.content || '' };
   }
@@ -117,9 +130,17 @@ ${tutorState.isLessonInitialized ? `
     const messages: any[] = [
       ...history,
       { role: 'assistant', content: null, tool_calls: openAiToolCalls },
-      ...toolResults.map(tr => ({ role: 'tool', content: JSON.stringify(tr.result), tool_call_id: tr.id }))
+      ...toolResults.map(tr => ({ 
+        role: 'tool', 
+        content: JSON.stringify(tr.result), 
+        tool_call_id: tr.id 
+      }))
     ];
-    const completion = await this.client.chat.completions.create({ model: this.model, messages });
+    const completion = await this.client.chat.completions.create({ 
+      model: this.model, 
+      messages,
+      max_tokens: 2000 
+    });
     return completion.choices[0]?.message?.content || '';
   }
   updateModel(newModel: string): void { this.model = newModel; }
