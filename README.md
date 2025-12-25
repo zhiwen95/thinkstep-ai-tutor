@@ -1,6 +1,6 @@
 # Cloudflare AI Chat Agent Template
 
-[![[cloudflarebutton]]](https://deploy.workers.cloudflare.com)
+[![[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/zhiwen95/thinkstep-ai-tutor)]](https://deploy.workers.cloudflare.com)
 
 A production-ready full-stack AI chat application built on Cloudflare Workers using the new Agents SDK. Features multi-session conversations powered by Durable Objects, tool calling (web search, weather, MCP tools), streaming responses, and a modern React UI.
 
@@ -90,7 +90,7 @@ Example frontend integration uses `src/lib/chat.ts` service.
    ```
 3. Your app is live! SPA assets are automatically served.
 
-[![[cloudflarebutton]]](https://deploy.workers.cloudflare.com)
+[![[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/zhiwen95/thinkstep-ai-tutor)]](https://deploy.workers.cloudflare.com)
 
 **Note**: Update Durable Object bindings/migrations in `wrangler.jsonc` if customizing classes.
 
