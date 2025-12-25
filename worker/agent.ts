@@ -10,7 +10,7 @@ export class ChatAgent extends Agent<Env, ChatState> {
     messages: [],
     sessionId: crypto.randomUUID(),
     isProcessing: false,
-    model: 'google-ai-studio/gemini-2.0-flash',
+    model: 'google/gemini-1.5-flash',
     tutorState: {
       plan: [],
       currentStepIndex: 0,
@@ -18,7 +18,7 @@ export class ChatAgent extends Agent<Env, ChatState> {
     }
   };
   async onStart(): Promise<void> {
-    this.chatHandler = new ChatHandler(this.env.CF_AI_BASE_URL, this.env.CF_AI_API_KEY, this.state.model);
+    this.chatHandler = new ChatHandler(this.env.CF_AI_BASE_URL, this.env.CF_AI_API_KEY, this.initialState.model);
   }
   async onRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -45,10 +45,11 @@ export class ChatAgent extends Agent<Env, ChatState> {
     if (attachments) {
       userMsg.attachments = attachments;
     }
-    this.setState({ 
-      ...this.state, 
-      messages: [...this.state.messages, userMsg], 
-      isProcessing: true 
+    const currentState = this.state;
+    this.setState({
+      ...currentState,
+      messages: [...currentState.messages, userMsg],
+      isProcessing: true
     });
     try {
       if (stream) {
@@ -57,12 +58,12 @@ export class ChatAgent extends Agent<Env, ChatState> {
         const encoder = createEncoder();
         (async () => {
           try {
-            const resp = await this.chatHandler!.processMessage(message || '', this.state, (chunk) => {
+            const resp = await this.chatHandler!.processMessage(message || '', currentState, (chunk) => {
               writer.write(encoder.encode(chunk));
             }, attachments);
-            this.applyTutorUpdates(resp.toolCalls);
+            this.applyTutorUpdates(resp.toolCalls, currentState);
             const assistantMsg = createMessage('assistant', resp.content, resp.toolCalls);
-            this.setState({ ...this.state, messages: [...this.state.messages, assistantMsg], isProcessing: false });
+            this.setState({ ...currentState, messages: [...currentState.messages, assistantMsg], isProcessing: false });
           } catch (err) {
             console.error('[Agent Stream Error]:', err);
             const errorMsg = encoder.encode(`\n\n[Error]: ${err instanceof Error ? err.message : 'Processing failed'}`);
@@ -73,24 +74,25 @@ export class ChatAgent extends Agent<Env, ChatState> {
         })();
         return createStreamResponse(readable);
       } else {
-        const resp = await this.chatHandler!.processMessage(message || '', this.state, undefined, attachments);
-        this.applyTutorUpdates(resp.toolCalls);
+        const resp = await this.chatHandler!.processMessage(message || '', currentState, undefined, attachments);
+        this.applyTutorUpdates(resp.toolCalls, currentState);
         const assistantMsg = createMessage('assistant', resp.content, resp.toolCalls);
-        this.setState({ ...this.state, messages: [...this.state.messages, assistantMsg], isProcessing: false });
+        this.setState({ ...currentState, messages: [...currentState.messages, assistantMsg], isProcessing: false });
         return Response.json({ success: true, data: this.state });
       }
     } catch (e) {
       console.error('[Agent Chat Error]:', e);
-      this.setState({ ...this.state, isProcessing: false });
+      this.setState({ ...currentState, isProcessing: false });
       return Response.json({ 
         success: false, 
         error: e instanceof Error ? e.message : API_RESPONSES.PROCESSING_ERROR 
       }, { status: 500 });
     }
   }
-  private applyTutorUpdates(toolCalls?: any[]) {
+  private applyTutorUpdates(toolCalls?: any[], currentState?: ChatState) {
     if (!toolCalls) return;
-    let newTutorState = { ...this.state.tutorState };
+    const stateToUse = currentState || this.state;
+    let newTutorState = { ...stateToUse.tutorState };
     for (const tc of toolCalls) {
       if (tc.name === 'create_lesson_plan') {
         newTutorState.plan = (tc.arguments.steps as any[]).map(s => ({ ...s, status: 'pending' }));
@@ -109,6 +111,6 @@ export class ChatAgent extends Agent<Env, ChatState> {
         }
       }
     }
-    this.setState({ ...this.state, tutorState: newTutorState });
+    this.setState({ ...stateToUse, tutorState: newTutorState });
   }
 }

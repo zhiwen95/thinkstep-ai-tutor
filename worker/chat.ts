@@ -38,7 +38,13 @@ export class ChatHandler {
       const contentBlocks: any[] = [{ type: 'text', text: m.content || 'Please look at this image.' }];
       for (const attachment of m.attachments) {
         if (attachment.type === 'image') {
-          contentBlocks.push({ type: 'image_url', image_url: { url: attachment.url } });
+          contentBlocks.push({ 
+            type: 'image_url', 
+            image_url: { 
+              url: attachment.url,
+              detail: 'high'
+            } 
+          });
         }
       }
       return contentBlocks;
@@ -47,7 +53,8 @@ export class ChatHandler {
   }
   private buildConversationMessages(userMessage: string, state: ChatState, newAttachments?: Attachment[]) {
     const { tutorState } = state;
-    const currentStep = tutorState.plan[tutorState.currentStepIndex];
+    const currentStepIndex = tutorState.currentStepIndex ?? 0;
+    const currentStep = tutorState.plan?.[currentStepIndex];
     const systemPrompt = `You are ThinkStep, an expert Socratic Tutor.
 Your goal is to guide students through complex problems using a step-by-step Lesson Plan.
 CORE RULES:
@@ -59,12 +66,12 @@ CORE RULES:
 6. Acknowledge any diagrams or images the user provides.
 Current Lesson State:
 ${tutorState.isLessonInitialized ? `
-- Current Step: ${tutorState.currentStepIndex + 1} of ${tutorState.plan.length}
+- Current Step: ${currentStepIndex + 1} of ${tutorState.plan?.length || 0}
 - Current Goal: ${currentStep?.goal || 'N/A'}
 ` : '- No lesson plan created yet.'}`;
     const history = state.messages.slice(-10).map(m => ({
       role: m.role as any,
-      content: this.formatMessageContent(m),
+      content: this.formatMessageContent(m || { content: '' }),
       ...(m.toolCalls && { 
         tool_calls: m.toolCalls.map(tc => ({ 
           id: tc.id, 
@@ -105,8 +112,29 @@ ${tutorState.isLessonInitialized ? `
     }
     if (accumulatedToolCalls.length > 0) {
       const toolResults = await this.executeToolCalls(accumulatedToolCalls);
-      const followUp = await this.generateToolResponse(history, accumulatedToolCalls, toolResults);
-      return { content: followUp, toolCalls: toolResults };
+      const newMessages: any[] = [
+        ...history,
+        { role: 'assistant', content: null, tool_calls: accumulatedToolCalls },
+        ...toolResults.map(tr => ({
+          role: 'tool',
+          content: JSON.stringify(tr.result),
+          tool_call_id: tr.id
+        }))
+      ];
+      const followUpStream = await this.client.chat.completions.create({
+        model: this.model,
+        messages: newMessages,
+        max_tokens: 2000,
+        stream: true
+      });
+      for await (const chunk of followUpStream) {
+        const delta = chunk.choices[0]?.delta;
+        if (delta?.content) {
+          fullContent += delta.content;
+          onChunk(delta.content);
+        }
+      }
+      return { content: fullContent, toolCalls: toolResults };
     }
     return { content: fullContent };
   }
