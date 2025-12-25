@@ -10,7 +10,7 @@ export interface Message {
 }
 export interface Attachment {
   type: 'image';
-  url: string; // Base64 or URL
+  url: string; // Base64 Data URL
 }
 export interface ToolCall {
   id: string;
@@ -33,7 +33,6 @@ export interface ChatState {
   sessionId: string;
   isProcessing: boolean;
   model: string;
-  streamingMessage?: string;
   tutorState: TutorState;
 }
 export interface SessionInfo {
@@ -41,13 +40,4 @@ export interface SessionInfo {
   title: string;
   createdAt: number;
   lastActive: number;
-}
-export interface Tool {
-  name: string;
-  description: string;
-  parameters: {
-    type: string;
-    properties: Record<string, unknown>;
-    required: string[];
-  };
 }

@@ -34,8 +34,8 @@ export class ChatAgent extends Agent<Env, ChatState> {
   }): Promise<Response> {
     const { message, stream, attachments } = body;
     const currentModel = body.model || this.state.model;
+    console.log(`[Agent] Processing request with model: ${currentModel}`);
     const chatHandler = new ChatHandler(this.env, currentModel);
-    // Allow empty message if there are attachments (e.g., just uploading a photo)
     if (!message?.trim() && (!attachments || attachments.length === 0)) {
       return Response.json({ success: false, error: API_RESPONSES.MISSING_MESSAGE }, { status: 400 });
     }
@@ -47,7 +47,8 @@ export class ChatAgent extends Agent<Env, ChatState> {
     this.setState({
       ...currentState,
       messages: [...currentState.messages, userMsg],
-      isProcessing: true
+      isProcessing: true,
+      model: currentModel
     });
     try {
       if (stream) {
@@ -59,7 +60,7 @@ export class ChatAgent extends Agent<Env, ChatState> {
             const resp = await chatHandler.processMessage(message || '', currentState, (chunk) => {
               writer.write(encoder.encode(chunk));
             }, attachments);
-            this.applyTutorUpdates(resp.toolCalls || [], currentState);
+            this.applyTutorUpdates(resp.toolCalls || []);
             const assistantMsg = createMessage('assistant', resp.content, resp.toolCalls || []);
             this.setState({ ...this.state, messages: [...this.state.messages, assistantMsg], isProcessing: false });
           } catch (err) {
@@ -73,7 +74,7 @@ export class ChatAgent extends Agent<Env, ChatState> {
         return createStreamResponse(readable);
       } else {
         const resp = await chatHandler.processMessage(message || '', currentState, undefined, attachments);
-        this.applyTutorUpdates(resp.toolCalls || [], currentState);
+        this.applyTutorUpdates(resp.toolCalls || []);
         const assistantMsg = createMessage('assistant', resp.content, resp.toolCalls || []);
         this.setState({ ...this.state, messages: [...this.state.messages, assistantMsg], isProcessing: false });
         return Response.json({ success: true, data: this.state });
@@ -81,25 +82,31 @@ export class ChatAgent extends Agent<Env, ChatState> {
     } catch (e) {
       console.error('[Agent Chat Error]:', e);
       this.setState({ ...this.state, isProcessing: false });
-      return Response.json({ 
-        success: false, 
-        error: e instanceof Error ? e.message : API_RESPONSES.PROCESSING_ERROR 
+      return Response.json({
+        success: false,
+        error: e instanceof Error ? e.message : API_RESPONSES.PROCESSING_ERROR
       }, { status: 500 });
     }
   }
-  private applyTutorUpdates(toolCalls?: any[], currentState?: ChatState) {
-    if (!toolCalls) return;
-    const stateToUse = currentState || this.state;
-    let newTutorState = { ...stateToUse.tutorState };
+  private applyTutorUpdates(toolCalls: any[]) {
+    if (!toolCalls || toolCalls.length === 0) return;
+    const state = this.state;
+    let newTutorState = { ...state.tutorState };
     for (const tc of toolCalls) {
-      if (tc.name === 'create_lesson_plan') {
-        newTutorState.plan = (tc.arguments.steps as any[]).map(s => ({ ...s, status: 'pending' }));
+      const functionName = tc.name || tc.function?.name;
+      const args = typeof tc.arguments === 'string' ? JSON.parse(tc.arguments) : (tc.arguments || tc.function?.arguments || {});
+      if (functionName === 'create_lesson_plan' && args.steps) {
+        newTutorState.plan = (args.steps as any[]).map(s => ({ 
+          title: s.title || s.goal || 'Untitled Step',
+          goal: s.goal || s.title || '', 
+          status: 'pending' 
+        }));
         if (newTutorState.plan.length > 0) {
           newTutorState.plan[0].status = 'active';
           newTutorState.isLessonInitialized = true;
           newTutorState.currentStepIndex = 0;
         }
-      } else if (tc.name === 'mark_step_complete') {
+      } else if (functionName === 'mark_step_complete') {
         if (newTutorState.plan[newTutorState.currentStepIndex]) {
           newTutorState.plan[newTutorState.currentStepIndex].status = 'completed';
         }
@@ -109,6 +116,6 @@ export class ChatAgent extends Agent<Env, ChatState> {
         }
       }
     }
-    this.setState({ ...stateToUse, tutorState: newTutorState });
+    this.setState({ ...state, tutorState: newTutorState });
   }
 }
