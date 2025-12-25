@@ -1,138 +1,157 @@
-// Home page of the app.
-// Currently a demo placeholder "please wait" screen.
-// Replace this file with your actual app UI. Do not delete it to use some other file as homepage. Simply replace the entire contents of this file.
-
-import { useEffect, useMemo, useState } from 'react'
-import { Sparkles } from 'lucide-react'
-
-import { ThemeToggle } from '@/components/ThemeToggle'
-import { HAS_TEMPLATE_DEMO, TemplateDemo } from '@/components/TemplateDemo'
-import { Button } from '@/components/ui/button'
-import { Toaster, toast } from '@/components/ui/sonner'
-
-function formatDuration(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
-}
-
+import React, { useState, useEffect, useRef } from 'react';
+import { Send, Trash2, Brain, Loader2 } from 'lucide-react';
+import { chatService } from '@/lib/chat';
+import { Button } from '@/components/ui/button';
+import { SketchCard } from '@/components/ui/sketch-card';
+import { LessonSidebar } from '@/components/lesson-sidebar';
+import ReactMarkdown from 'react-markdown';
+import { cn } from '@/lib/utils';
+import type { Message, ChatState } from '../../worker/types';
 export function HomePage() {
-  const [coins, setCoins] = useState(0)
-  const [isRunning, setIsRunning] = useState(false)
-  const [startedAt, setStartedAt] = useState<number | null>(null)
-  const [elapsedMs, setElapsedMs] = useState(0)
-
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [tutorState, setTutorState] = useState<ChatState['tutorState']>({
+    plan: [],
+    currentStepIndex: 0,
+    isLessonInitialized: false
+  });
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [streamingText, setStreamingText] = useState('');
+  const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!isRunning || startedAt === null) return
-
-    const t = setInterval(() => {
-      setElapsedMs(Date.now() - startedAt)
-    }, 250)
-
-    return () => clearInterval(t)
-  }, [isRunning, startedAt])
-
-  const formatted = useMemo(() => formatDuration(elapsedMs), [elapsedMs])
-
-  const onPleaseWait = () => {
-    setCoins((c) => c + 1)
-
-    if (!isRunning) {
-      // Resume from the current elapsed time
-      setStartedAt(Date.now() - elapsedMs)
-      setIsRunning(true)
-      toast.success('Building your app…', {
-        description: "Hang tight — we're setting everything up.",
-      })
-      return
+    loadHistory();
+  }, []);
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-
-    setIsRunning(false)
-    toast.info('Still working…', {
-      description: 'You can come back in a moment.',
-    })
-  }
-
-  const onReset = () => {
-    setCoins(0)
-    setIsRunning(false)
-    setStartedAt(null)
-    setElapsedMs(0)
-    toast('Reset complete')
-  }
-
-  const onAddCoin = () => {
-    setCoins((c) => c + 1)
-    toast('Coin added')
-  }
-
+  }, [messages, streamingText]);
+  const loadHistory = async () => {
+    const res = await chatService.getMessages();
+    if (res.success && res.data) {
+      setMessages(res.data.messages);
+      setTutorState(res.data.tutorState);
+    }
+  };
+  const handleSend = async () => {
+    if (!input.trim() || isLoading) return;
+    const userMsg = input;
+    setInput('');
+    setIsLoading(true);
+    setStreamingText('');
+    // Optimistic local update
+    const tempUserMsg: Message = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: userMsg,
+      timestamp: Date.now()
+    };
+    setMessages(prev => [...prev, tempUserMsg]);
+    try {
+      await chatService.sendMessage(userMsg, undefined, (chunk) => {
+        setStreamingText(prev => prev + chunk);
+      });
+      // After stream finishes, refresh final state
+      await loadHistory();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsLoading(false);
+      setStreamingText('');
+    }
+  };
+  const clearChat = async () => {
+    await chatService.clearMessages();
+    setMessages([]);
+    setTutorState({ plan: [], currentStepIndex: 0, isLessonInitialized: false });
+  };
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-4 overflow-hidden relative">
-      <ThemeToggle />
-      <div className="absolute inset-0 bg-gradient-rainbow opacity-10 dark:opacity-20 pointer-events-none" />
-
-      <div className="text-center space-y-8 relative z-10 animate-fade-in w-full">
-        <div className="flex justify-center">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-primary flex items-center justify-center shadow-primary floating">
-            <Sparkles className="w-8 h-8 text-white rotating" />
+    <div className="flex h-screen bg-[#FDFBF7] text-[#2D3436] font-sans overflow-hidden">
+      {/* Sidebar Area */}
+      <aside className="hidden md:block w-80 lg:w-96 shrink-0 border-r-2 border-black bg-paper">
+        <LessonSidebar steps={tutorState.plan} currentIndex={tutorState.currentStepIndex} />
+      </aside>
+      {/* Main Chat Area */}
+      <main className="flex-1 flex flex-col relative">
+        <header className="h-16 border-b-2 border-black flex items-center justify-between px-6 bg-white z-10">
+          <div className="flex items-center gap-2">
+            <div className="p-1 border-2 border-black bg-yellow-400 rotate-3">
+              <Brain className="w-5 h-5" />
+            </div>
+            <h1 className="text-xl font-black italic tracking-tight">ThinkStep AI</h1>
           </div>
+          <Button variant="ghost" onClick={clearChat} className="text-xs hover:bg-red-50 hover:text-red-600 transition-colors">
+            <Trash2 className="w-4 h-4 mr-2" /> Reset Lesson
+          </Button>
+        </header>
+        {/* Scrollable messages */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6 pb-32 scroll-smooth">
+          {messages.length === 0 && (
+            <div className="max-w-2xl mx-auto pt-20 text-center space-y-4">
+              <h2 className="text-4xl font-black italic">What can I help you learn today?</h2>
+              <p className="font-hand text-xl text-ink-muted">Type any topic or problem, and we'll break it down together.</p>
+            </div>
+          )}
+          {messages.map((m) => (
+            <div key={m.id} className={cn("flex w-full", m.role === 'user' ? "justify-end" : "justify-start")}>
+              <SketchCard 
+                variant={m.role === 'user' ? 'accent' : 'default'}
+                className={cn(
+                  "max-w-[85%] md:max-w-[70%]",
+                  m.role === 'user' ? "-rotate-1" : "rotate-1"
+                )}
+              >
+                <div className="prose prose-sm dark:prose-invert max-w-none">
+                  <ReactMarkdown>{m.content}</ReactMarkdown>
+                </div>
+              </SketchCard>
+            </div>
+          ))}
+          {streamingText && (
+            <div className="flex justify-start">
+              <SketchCard className="max-w-[85%] md:max-w-[70%] rotate-1">
+                <div className="prose prose-sm max-w-none">
+                  <ReactMarkdown>{streamingText}</ReactMarkdown>
+                </div>
+              </SketchCard>
+            </div>
+          )}
+          {isLoading && !streamingText && (
+            <div className="flex justify-start">
+              <div className="flex items-center gap-2 font-hand animate-pulse ml-4">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Thinking...
+              </div>
+            </div>
+          )}
         </div>
-
-        <div className="space-y-3">
-          <h1 className="text-5xl md:text-7xl font-display font-bold text-balance leading-tight">
-            Creating your <span className="text-gradient">app</span>
-          </h1>
-          <p className="text-lg md:text-xl text-muted-foreground max-w-xl mx-auto text-pretty">
-            Your application would be ready soon.
+        {/* Input Bar */}
+        <div className="absolute bottom-0 left-0 right-0 p-4 md:p-6 bg-gradient-to-t from-paper via-paper/90 to-transparent">
+          <div className="max-w-4xl mx-auto flex gap-3">
+            <div className="relative flex-1">
+              <input 
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                placeholder="Ask your tutor anything..."
+                className="w-full p-4 border-2 border-black bg-white shadow-hard focus:outline-none focus:ring-2 focus:ring-yellow-400 text-lg transition-all"
+              />
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex gap-1">
+                <Button 
+                  onClick={handleSend}
+                  disabled={isLoading || !input.trim()}
+                  className="bg-black hover:bg-black/90 text-white rounded-none h-10 w-10 p-0 shadow-hard-sm"
+                >
+                  <Send className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          </div>
+          <p className="text-center text-[10px] text-ink-muted mt-4">
+            ThinkStep AI is a learning assistant. Please verify important facts. Limit on AI requests may apply.
           </p>
         </div>
-
-        {HAS_TEMPLATE_DEMO ? (
-          <div className="max-w-5xl mx-auto text-left">
-            <TemplateDemo />
-          </div>
-        ) : (
-          <>
-            <div className="flex justify-center gap-4">
-              <Button
-                size="lg"
-                onClick={onPleaseWait}
-                className="btn-gradient px-8 py-4 text-lg font-semibold hover:-translate-y-0.5 transition-all duration-200"
-                aria-live="polite"
-              >
-                Please Wait
-              </Button>
-            </div>
-
-            <div className="flex items-center justify-center gap-6 text-sm text-muted-foreground">
-              <div>
-                Time elapsed:{' '}
-                <span className="font-medium tabular-nums text-foreground">{formatted}</span>
-              </div>
-              <div>
-                Coins:{' '}
-                <span className="font-medium tabular-nums text-foreground">{coins}</span>
-              </div>
-            </div>
-
-            <div className="flex justify-center gap-2">
-              <Button variant="outline" size="sm" onClick={onReset}>
-                Reset
-              </Button>
-              <Button variant="outline" size="sm" onClick={onAddCoin}>
-                Add Coin
-              </Button>
-            </div>
-          </>
-        )}
-      </div>
-
-      <footer className="absolute bottom-8 text-center text-muted-foreground/80">
-        <p>Powered by Cloudflare</p>
-      </footer>
-
-      <Toaster richColors closeButton />
+      </main>
     </div>
-  )
+  );
 }
