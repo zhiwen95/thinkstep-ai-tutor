@@ -1,15 +1,26 @@
 import OpenAI from 'openai';
 import type { Message, ToolCall, ChatState, Attachment } from './types';
+import type { Env } from './core-utils';
 import { getToolDefinitions, executeTool } from './tools';
 export class ChatHandler {
   private client: OpenAI;
   private model: string;
-  constructor(aiGatewayUrl: string, apiKey: string, model: string) {
-    this.client = new OpenAI({
-      baseURL: aiGatewayUrl,
-      apiKey: apiKey
-    });
+  constructor(env: any, model: string) {
     this.model = model;
+    if (model.startsWith('openrouter/')) {
+      const key = env.OPENROUTER_API_KEY;
+      if (!key) throw new Error('OPENROUTER_API_KEY missing');
+      this.client = new OpenAI({
+        baseURL: 'https://openrouter.ai/api/v1',
+        apiKey: key
+      });
+      this.model = model.replace(/^openrouter\//, '');
+    } else {
+      this.client = new OpenAI({
+        baseURL: env.CF_AI_BASE_URL!,
+        apiKey: env.CF_AI_API_KEY!
+      });
+    }
   }
   async processMessage(
     message: string,

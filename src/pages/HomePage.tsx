@@ -5,12 +5,14 @@ import { Button } from '@/components/ui/button';
 import { SketchCard } from '@/components/ui/sketch-card';
 import { LessonSidebar } from '@/components/lesson-sidebar';
 import ReactMarkdown from 'react-markdown';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-import type { Message, ChatState } from '../../worker/types';
+import { MODELS } from '@/lib/chat';
+import type { Message, TutorState } from '@/lib/chat';
 export function HomePage() {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [tutorState, setTutorState] = useState<ChatState['tutorState']>({
+  const [tutorState, setTutorState] = useState<TutorState>({
     plan: [],
     currentStepIndex: 0,
     isLessonInitialized: false
@@ -20,6 +22,7 @@ export function HomePage() {
   const [streamingText, setStreamingText] = useState('');
   const [pendingImage, setPendingImage] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [selectedModel, setSelectedModel] = useState(MODELS[0].id);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -34,7 +37,7 @@ export function HomePage() {
     const res = await chatService.getMessages();
     if (res.success && res.data) {
       setMessages(res.data.messages);
-      setTutorState(res.data.tutorState);
+      setTutorState(res.data.tutorState || { plan: [], currentStepIndex: 0, isLessonInitialized: false });
     }
   };
   const handleImageUpload = (file: File) => {
@@ -69,7 +72,7 @@ export function HomePage() {
     };
     setMessages(prev => [...prev, tempUserMsg]);
     try {
-      await chatService.sendMessage(userMsg, undefined, (chunk) => {
+      await chatService.sendMessage(userMsg, selectedModel, (chunk) => {
         setStreamingText(prev => prev + chunk);
       }, currentImage || undefined);
       await loadHistory();
@@ -109,7 +112,7 @@ export function HomePage() {
       )}
       {/* Sidebar Area */}
       <aside className="hidden md:block w-80 lg:w-96 shrink-0 border-r-2 border-black bg-paper">
-        <LessonSidebar steps={tutorState.plan} currentIndex={tutorState.currentStepIndex} />
+        <LessonSidebar steps={tutorState.plan.map((step: any) => ({ title: step.goal || 'Untitled Step', goal: step.goal, status: step.status }))} currentIndex={tutorState.currentStepIndex} />
       </aside>
       {/* Main Chat Area */}
       <main className="flex-1 flex flex-col relative">
@@ -174,7 +177,7 @@ export function HomePage() {
               <div className="mb-4 flex justify-start">
                 <div className="relative p-2 bg-white border-2 border-black shadow-hard -rotate-2 group">
                   <img src={pendingImage} alt="Preview" className="h-24 w-auto object-contain border border-black" />
-                  <button 
+                  <button
                     onClick={() => setPendingImage(null)}
                     className="absolute -top-2 -right-2 bg-red-500 text-white p-1 border-2 border-black rounded-full hover:scale-110 transition-transform"
                   >
@@ -183,6 +186,20 @@ export function HomePage() {
                 </div>
               </div>
             )}
+            <div className="flex items-end gap-3 mb-3">
+              <Select value={selectedModel} onValueChange={setSelectedModel}>
+                <SelectTrigger className="w-48 h-10 border-2 border-black shadow-hard-sm bg-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MODELS.map((model) => (
+                    <SelectItem key={model.id} value={model.id}>
+                      {model.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="flex gap-3">
               <div className="relative flex-1">
                 <input

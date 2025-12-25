@@ -5,21 +5,17 @@ import { ChatHandler } from './chat';
 import { API_RESPONSES } from './config';
 import { createMessage, createStreamResponse, createEncoder } from './utils';
 export class ChatAgent extends Agent<Env, ChatState> {
-  private chatHandler?: ChatHandler;
   initialState: ChatState = {
     messages: [],
     sessionId: crypto.randomUUID(),
     isProcessing: false,
-    model: 'google/gemini-1.5-flash',
+    model: 'openrouter/openai/gpt-4o-mini',
     tutorState: {
       plan: [],
       currentStepIndex: 0,
       isLessonInitialized: false
     }
   };
-  async onStart(): Promise<void> {
-    this.chatHandler = new ChatHandler(this.env.CF_AI_BASE_URL, this.env.CF_AI_API_KEY, this.initialState.model);
-  }
   async onRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === 'GET' && url.pathname === '/messages') return Response.json({ success: true, data: this.state });
@@ -30,13 +26,15 @@ export class ChatAgent extends Agent<Env, ChatState> {
     }
     return Response.json({ success: false, error: API_RESPONSES.NOT_FOUND }, { status: 404 });
   }
-  private async handleChatMessage(body: { 
-    message: string; 
-    model?: string; 
+  private async handleChatMessage(body: {
+    message: string;
+    model?: string;
     stream?: boolean;
     attachments?: Attachment[];
   }): Promise<Response> {
     const { message, stream, attachments } = body;
+    const currentModel = body.model || this.state.model;
+    const chatHandler = new ChatHandler(this.env, currentModel);
     // Allow empty message if there are attachments (e.g., just uploading a photo)
     if (!message?.trim() && (!attachments || attachments.length === 0)) {
       return Response.json({ success: false, error: API_RESPONSES.MISSING_MESSAGE }, { status: 400 });
@@ -58,12 +56,12 @@ export class ChatAgent extends Agent<Env, ChatState> {
         const encoder = createEncoder();
         (async () => {
           try {
-            const resp = await this.chatHandler!.processMessage(message || '', currentState, (chunk) => {
+            const resp = await chatHandler.processMessage(message || '', currentState, (chunk) => {
               writer.write(encoder.encode(chunk));
             }, attachments);
-            this.applyTutorUpdates(resp.toolCalls, currentState);
-            const assistantMsg = createMessage('assistant', resp.content, resp.toolCalls);
-            this.setState({ ...currentState, messages: [...currentState.messages, assistantMsg], isProcessing: false });
+            this.applyTutorUpdates(resp.toolCalls || [], currentState);
+            const assistantMsg = createMessage('assistant', resp.content, resp.toolCalls || []);
+            this.setState({ ...this.state, messages: [...this.state.messages, assistantMsg], isProcessing: false });
           } catch (err) {
             console.error('[Agent Stream Error]:', err);
             const errorMsg = encoder.encode(`\n\n[Error]: ${err instanceof Error ? err.message : 'Processing failed'}`);
@@ -74,15 +72,15 @@ export class ChatAgent extends Agent<Env, ChatState> {
         })();
         return createStreamResponse(readable);
       } else {
-        const resp = await this.chatHandler!.processMessage(message || '', currentState, undefined, attachments);
-        this.applyTutorUpdates(resp.toolCalls, currentState);
-        const assistantMsg = createMessage('assistant', resp.content, resp.toolCalls);
-        this.setState({ ...currentState, messages: [...currentState.messages, assistantMsg], isProcessing: false });
+        const resp = await chatHandler.processMessage(message || '', currentState, undefined, attachments);
+        this.applyTutorUpdates(resp.toolCalls || [], currentState);
+        const assistantMsg = createMessage('assistant', resp.content, resp.toolCalls || []);
+        this.setState({ ...this.state, messages: [...this.state.messages, assistantMsg], isProcessing: false });
         return Response.json({ success: true, data: this.state });
       }
     } catch (e) {
       console.error('[Agent Chat Error]:', e);
-      this.setState({ ...currentState, isProcessing: false });
+      this.setState({ ...this.state, isProcessing: false });
       return Response.json({ 
         success: false, 
         error: e instanceof Error ? e.message : API_RESPONSES.PROCESSING_ERROR 

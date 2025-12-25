@@ -1,18 +1,40 @@
-import type { Message, ChatState, ToolCall, SessionInfo } from '../../worker/types';
+export interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  attachments?: Array<{ type: string; url: string }>;
+}
+
+export interface TutorState {
+  plan: Array<{ goal: string; status: string }>;
+  currentStepIndex: number;
+  isLessonInitialized: boolean;
+}
+
 export interface ChatResponse {
   success: boolean;
-  data?: ChatState;
+  data?: {
+    messages: Message[];
+    tutorState: TutorState;
+  };
   error?: string;
 }
 export const MODELS = [
-  { id: 'google-ai-studio/gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
-  { id: 'google-ai-studio/gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
+  { id: 'openrouter/openai/gpt-4o-mini', name: 'GPT-4o Mini (Vision)' },
+  { id: 'openrouter/openai/gpt-4o', name: 'GPT-4o' },
+  { id: 'cf/google/gemini-1.5-flash-exp', name: 'Gemini 1.5 Flash' }
 ];
 class ChatService {
   private sessionId: string;
   private baseUrl: string;
   constructor() {
-    this.sessionId = crypto.randomUUID();
+    if (typeof localStorage !== 'undefined') {
+      this.sessionId = localStorage.getItem('chatSessionId') || crypto.randomUUID();
+      localStorage.setItem('chatSessionId', this.sessionId);
+    } else {
+      this.sessionId = crypto.randomUUID();
+    }
     this.baseUrl = `/api/chat/${this.sessionId}`;
   }
   async sendMessage(
@@ -51,7 +73,7 @@ class ChatService {
       }
       return await response.json();
     } catch (error) {
-      console.error('Failed to send message:', error);
+      console.error('Failed to send message:', error instanceof Error ? error.message : String(error));
       return { success: false, error: 'Failed to send message' };
     }
   }
@@ -61,7 +83,7 @@ class ChatService {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return await response.json();
     } catch (error) {
-      console.error('Failed to get messages:', error);
+      console.error('Failed to get messages:', error instanceof Error ? error.message : String(error));
       return { success: false, error: 'Failed to load messages' };
     }
   }
@@ -71,17 +93,23 @@ class ChatService {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return await response.json();
     } catch (error) {
-      console.error('Failed to clear messages:', error);
+      console.error('Failed to clear messages:', error instanceof Error ? error.message : String(error));
       return { success: false, error: 'Failed to clear messages' };
     }
   }
   getSessionId(): string { return this.sessionId; }
   newSession(): void {
     this.sessionId = crypto.randomUUID();
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('chatSessionId', this.sessionId);
+    }
     this.baseUrl = `/api/chat/${this.sessionId}`;
   }
   switchSession(sessionId: string): void {
     this.sessionId = sessionId;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('chatSessionId', this.sessionId);
+    }
     this.baseUrl = `/api/chat/${sessionId}`;
   }
   async createSession(title?: string, sessionId?: string, firstMessage?: string) {
@@ -93,6 +121,7 @@ class ChatService {
       });
       return await response.json();
     } catch (error) {
+      console.error('Failed to create session:', error instanceof Error ? error.message : String(error));
       return { success: false, error: 'Failed to create session' };
     }
   }
@@ -101,6 +130,7 @@ class ChatService {
       const response = await fetch('/api/sessions');
       return await response.json();
     } catch (error) {
+      console.error('Failed to list sessions:', error instanceof Error ? error.message : String(error));
       return { success: false, error: 'Failed to list sessions' };
     }
   }
@@ -109,11 +139,12 @@ class ChatService {
       const response = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
       return await response.json();
     } catch (error) {
+      console.error('Failed to delete session:', error instanceof Error ? error.message : String(error));
       return { success: false, error: 'Failed to delete session' };
     }
   }
 }
 export const chatService = new ChatService();
-export const renderToolCall = (toolCall: ToolCall): string => {
+export const renderToolCall = (toolCall: { name: string }): string => {
   return `🔧 ${toolCall.name}: Done`;
 };
