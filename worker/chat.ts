@@ -58,7 +58,8 @@ export class ChatHandler {
   private formatMessageContent(m: { content: string; attachments?: Attachment[] }) {
     if (m.attachments && m.attachments.length > 0) {
       const contentBlocks: any[] = [];
-      if (m.content) contentBlocks.push({ type: 'text', text: m.content });
+      // Ensure at least an empty text block if content is empty to satisfy some providers
+      contentBlocks.push({ type: 'text', text: m.content || "Attached image(s)" });
       for (const attachment of m.attachments) {
         if (attachment.type === 'image') {
           contentBlocks.push({
@@ -72,26 +73,28 @@ export class ChatHandler {
       }
       return contentBlocks;
     }
-    return m.content;
+    return m.content || "";
   }
   private buildConversationMessages(userMessage: string, state: ChatState, newAttachments?: Attachment[]) {
     const { tutorState } = state;
     const currentStepIndex = tutorState.currentStepIndex ?? 0;
     const currentStep = tutorState.plan?.[currentStepIndex];
-    const systemPrompt = `You are ThinkStep, an expert Socratic Tutor.
-Your goal is to guide students through complex problems using a step-by-step Lesson Plan.
-CORE RULES:
-1. If no lesson plan exists, analyze the user's problem and call 'create_lesson_plan'.
-2. Present only ONE step at a time. Do not dump the full solution.
-3. Be encouraging and ask "Checking Questions" to verify understanding.
-4. Only advance (call 'mark_step_complete') when the user demonstrates understanding of the current goal.
-5. If the user is confused, stay on the current step and try a different explanation.
-Current Lesson State:
+    const systemPrompt = `You are ThinkStep, a patient expert Socratic Tutor.
+Your objective is to guide students through problems step-by-step using the 'Planner-Executor-Evaluator' method.
+SOCRATIC CONSTRAINTS:
+1. NEVER provide the final answer or a full solution immediately, even if requested.
+2. If no plan exists, analyze the problem and call 'create_lesson_plan'.
+3. Present only ONE step at a time. Explain the concept then ask a "Checking Question".
+4. Call 'mark_step_complete' ONLY when the user demonstrates they have grasped the current concept.
+5. If the user is confused, stay on the current step. Offer hints or alternative explanations.
+6. Acknowledge and use any shared images/homework visuals to personalize your guidance.
+Current Status:
 ${tutorState.isLessonInitialized ? `
-- Current Step: ${currentStepIndex + 1} of ${tutorState.plan?.length || 0}
-- Current Goal: ${currentStep?.goal || 'N/A'}
-` : '- No lesson plan created yet.'}`;
-    const history = state.messages.slice(-12).map(m => ({
+- Plan length: ${tutorState.plan?.length || 0} steps
+- Current Active Step: ${currentStepIndex + 1}
+- Current Goal: ${currentStep?.goal || 'Developing core concept'}
+` : '- No plan active yet. Analyze the prompt to create one.'}`;
+    const history = state.messages.slice(-10).map(m => ({
       role: m.role as any,
       content: this.formatMessageContent(m),
       ...(m.toolCalls && {
@@ -175,8 +178,8 @@ ${tutorState.isLessonInitialized ? `
     return Promise.all(openAiToolCalls.map(async (tc) => {
       let args = {};
       try {
-        args = typeof tc.function.arguments === 'string' 
-          ? JSON.parse(tc.function.arguments) 
+        args = typeof tc.function.arguments === 'string'
+          ? JSON.parse(tc.function.arguments)
           : tc.function.arguments;
       } catch (e) {
         console.warn('Failed to parse tool arguments:', tc.function.arguments);

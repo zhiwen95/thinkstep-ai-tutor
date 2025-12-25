@@ -1,12 +1,27 @@
+export interface Attachment {
+  type: 'image';
+  url: string;
+}
 export interface Message {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   timestamp: number;
-  attachments?: Array<{ type: string; url: string }>;
+  attachments?: Attachment[];
+  toolCalls?: Array<{
+    id: string;
+    name: string;
+    arguments: Record<string, unknown>;
+    result?: unknown;
+  }>;
+}
+export interface LessonStep {
+  title: string;
+  goal: string;
+  status: 'pending' | 'active' | 'completed';
 }
 export interface TutorState {
-  plan: Array<{ title: string; goal: string; status: string }>;
+  plan: LessonStep[];
   currentStepIndex: number;
   isLessonInitialized: boolean;
 }

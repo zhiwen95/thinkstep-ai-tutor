@@ -8,7 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-import type { Message, TutorState } from '@/lib/chat';
+import type { Message, TutorState, LessonStep } from '@/lib/chat';
 export function HomePage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [tutorState, setTutorState] = useState<TutorState>({
@@ -36,7 +36,8 @@ export function HomePage() {
     const res = await chatService.getMessages();
     if (res.success && res.data) {
       setMessages(res.data.messages);
-      setTutorState(res.data.tutorState);
+      // Cast here ensures that the status union type matches the updated LessonStep interface
+      setTutorState(res.data.tutorState as TutorState);
     }
   };
   const handleImageUpload = (file: File) => {
@@ -85,20 +86,20 @@ export function HomePage() {
     setTutorState({ plan: [], currentStepIndex: 0, isLessonInitialized: false });
     toast.success('Session reset successfully.');
   };
-  const currentModelName = MODELS.find(m => m.id === selectedModel)?.name || 'AI Tutor';
+  const currentModelName = MODELS.find(m => m.id === selectedModel)?.name || 'ThinkStep AI';
   return (
     <div className="flex h-screen bg-[#FDFBF7] text-[#2D3436] font-sans overflow-hidden">
       {/* Sidebar - Desktop Only */}
       <aside className="hidden md:flex w-80 lg:w-96 shrink-0 flex-col border-r-2 border-black bg-paper">
-        <LessonSidebar 
-          steps={tutorState.plan} 
-          currentIndex={tutorState.currentStepIndex} 
+        <LessonSidebar
+          steps={tutorState.plan as any}
+          currentIndex={tutorState.currentStepIndex}
         />
       </aside>
       {/* Main Content */}
       <main className="flex-1 flex flex-col relative bg-[#FDFBF7]">
         {/* Header */}
-        <header className="h-16 border-b-2 border-black flex items-center justify-between px-6 bg-white z-10">
+        <header className="h-16 border-b-2 border-black flex items-center justify-between px-6 bg-white z-10 shrink-0">
           <div className="flex items-center gap-3">
             <div className="p-1 border-2 border-black bg-yellow-400 rotate-3 shadow-hard-sm">
               <Brain className="w-5 h-5" />
@@ -107,7 +108,7 @@ export function HomePage() {
           </div>
           <div className="flex items-center gap-4">
              <Select value={selectedModel} onValueChange={setSelectedModel}>
-                <SelectTrigger className="w-40 h-9 border-2 border-black shadow-hard-sm bg-white text-xs font-bold">
+                <SelectTrigger className="w-40 h-9 border-2 border-black shadow-hard-sm bg-white text-xs font-bold focus:ring-0">
                   <Sparkles className="w-3 h-3 mr-1" />
                   <SelectValue />
                 </SelectTrigger>
@@ -132,7 +133,7 @@ export function HomePage() {
                 </div>
                 <h2 className="text-4xl font-black italic leading-tight">Ready to master a new topic?</h2>
                 <p className="font-hand text-xl text-ink-muted max-w-md mx-auto">
-                  Type your problem or drag a photo of your homework here to start our lesson.
+                  Type your problem or share a photo of your homework. I'll guide you through it step-by-step.
                 </p>
               </div>
             )}
@@ -146,7 +147,7 @@ export function HomePage() {
                     m.role === 'user' ? "-rotate-1" : "rotate-1"
                   )}
                 >
-                  <div className="prose prose-sm max-w-none">
+                  <div className="prose prose-sm max-w-none prose-p:leading-relaxed prose-headings:font-black">
                     <ReactMarkdown>{m.content}</ReactMarkdown>
                   </div>
                 </SketchCard>
@@ -156,7 +157,7 @@ export function HomePage() {
               <div className="flex justify-start animate-in fade-in duration-300">
                 <SketchCard className="max-w-[90%] md:max-w-[75%] rotate-1">
                   {streamingText ? (
-                    <div className="prose prose-sm max-w-none">
+                    <div className="prose prose-sm max-w-none prose-p:leading-relaxed">
                       <ReactMarkdown>{streamingText}</ReactMarkdown>
                     </div>
                   ) : (
@@ -171,13 +172,13 @@ export function HomePage() {
           </div>
         </div>
         {/* Sticky Input Bar */}
-        <div className="w-full bg-gradient-to-t from-paper via-paper to-transparent pb-8 pt-4 px-4 sm:px-6 lg:px-8">
+        <div className="w-full bg-gradient-to-t from-paper via-paper to-transparent pb-8 pt-4 px-4 sm:px-6 lg:px-8 shrink-0">
           <div className="max-w-4xl mx-auto relative">
             {pendingImage && (
               <div className="absolute -top-32 left-0 animate-in slide-in-from-bottom-4">
                 <div className="relative p-2 bg-white border-2 border-black shadow-hard -rotate-2">
                   <img src={pendingImage} alt="Preview" className="h-24 w-auto object-contain" />
-                  <button 
+                  <button
                     onClick={() => setPendingImage(null)}
                     className="absolute -top-2 -right-2 bg-black text-white p-1 rounded-full hover:scale-110 transition-transform"
                   >
@@ -191,7 +192,7 @@ export function HomePage() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                placeholder="How do I solve this step by step?"
+                placeholder="Ask your question here..."
                 className="w-full p-5 pl-14 border-2 border-black bg-white shadow-hard focus:outline-none focus:ring-4 focus:ring-yellow-400/30 text-lg transition-all"
               />
               <button
@@ -200,38 +201,49 @@ export function HomePage() {
               >
                 <Paperclip className="w-6 h-6" />
               </button>
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                className="hidden" 
-                accept="image/*" 
-                onChange={(e) => e.target.files?.[0] && handleImageUpload(e.target.files[0])} 
+              <input
+                type="file"
+                ref={fileInputRef}
+                className="hidden"
+                accept="image/*"
+                onChange={(e) => e.target.files?.[0] && handleImageUpload(e.target.files[0])}
               />
               <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
                  <Button
                   onClick={handleSend}
                   disabled={isLoading || (!input.trim() && !pendingImage)}
-                  className="bg-black hover:bg-black/90 text-white rounded-none h-12 w-12 p-0 shadow-hard-sm active:translate-y-0.5 active:shadow-none transition-all"
+                  className="bg-black hover:bg-black/90 text-white rounded-none h-12 w-12 p-0 shadow-hard-sm active:translate-y-0.5 active:shadow-none transition-all disabled:opacity-50"
                 >
                   <Send className="w-5 h-5" />
                 </Button>
               </div>
             </div>
             <p className="text-center text-[10px] text-ink-muted mt-4 font-medium uppercase tracking-widest">
-              ThinkStep AI • Powered by GPT-4o Vision • Requests may be limited
+              ThinkStep AI • Note: Request limits may apply • Vision Enabled
             </p>
           </div>
         </div>
-        {/* Drop Zone Overlay */}
-        {isDragging && (
-           <div className="absolute inset-0 z-50 bg-yellow-400/30 backdrop-blur-sm border-8 border-dashed border-black flex items-center justify-center p-12">
-              <div className="bg-white p-12 border-4 border-black shadow-hard-lg rotate-2 text-center space-y-4">
-                 <ImageIcon className="w-20 h-20 mx-auto animate-bounce" />
-                 <h3 className="text-3xl font-black italic">Drop to share!</h3>
-                 <p className="font-hand text-xl">I'll take a look at your problem immediately.</p>
-              </div>
-           </div>
-        )}
+        {/* Drag Over Overlay */}
+        <div 
+          className={cn(
+            "absolute inset-0 z-50 bg-yellow-400/30 backdrop-blur-sm border-8 border-dashed border-black flex items-center justify-center p-12 transition-all duration-300",
+            isDragging ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+          )}
+          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragging(false);
+            const file = e.dataTransfer.files[0];
+            if (file) handleImageUpload(file);
+          }}
+        >
+          <div className="bg-white p-12 border-4 border-black shadow-hard-lg rotate-2 text-center space-y-4">
+             <ImageIcon className="w-20 h-20 mx-auto animate-bounce" />
+             <h3 className="text-3xl font-black italic">Drop to share!</h3>
+             <p className="font-hand text-xl">I'll help you solve this homework problem.</p>
+          </div>
+        </div>
       </main>
     </div>
   );

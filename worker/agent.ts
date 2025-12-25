@@ -1,6 +1,6 @@
 import { Agent } from 'agents';
 import type { Env } from './core-utils';
-import type { ChatState, Message, Attachment } from './types';
+import type { ChatState, Message, Attachment, LessonStep } from './types';
 import { ChatHandler } from './chat';
 import { API_RESPONSES } from './config';
 import { createMessage, createStreamResponse, createEncoder } from './utils';
@@ -34,7 +34,6 @@ export class ChatAgent extends Agent<Env, ChatState> {
   }): Promise<Response> {
     const { message, stream, attachments } = body;
     const currentModel = body.model || this.state.model;
-    console.log(`[Agent] Processing request with model: ${currentModel}`);
     const chatHandler = new ChatHandler(this.env, currentModel);
     if (!message?.trim() && (!attachments || attachments.length === 0)) {
       return Response.json({ success: false, error: API_RESPONSES.MISSING_MESSAGE }, { status: 400 });
@@ -95,11 +94,11 @@ export class ChatAgent extends Agent<Env, ChatState> {
     for (const tc of toolCalls) {
       const functionName = tc.name || tc.function?.name;
       const args = typeof tc.arguments === 'string' ? JSON.parse(tc.arguments) : (tc.arguments || tc.function?.arguments || {});
-      if (functionName === 'create_lesson_plan' && args.steps) {
-        newTutorState.plan = (args.steps as any[]).map(s => ({ 
+      if (functionName === 'create_lesson_plan' && Array.isArray(args.steps)) {
+        newTutorState.plan = args.steps.map((s: any) => ({
           title: s.title || s.goal || 'Untitled Step',
-          goal: s.goal || s.title || '', 
-          status: 'pending' 
+          goal: s.goal || s.title || '',
+          status: 'pending' as const
         }));
         if (newTutorState.plan.length > 0) {
           newTutorState.plan[0].status = 'active';
@@ -107,12 +106,17 @@ export class ChatAgent extends Agent<Env, ChatState> {
           newTutorState.currentStepIndex = 0;
         }
       } else if (functionName === 'mark_step_complete') {
-        if (newTutorState.plan[newTutorState.currentStepIndex]) {
-          newTutorState.plan[newTutorState.currentStepIndex].status = 'completed';
+        const idx = newTutorState.currentStepIndex;
+        if (newTutorState.plan[idx]) {
+          newTutorState.plan[idx].status = 'completed';
         }
-        newTutorState.currentStepIndex++;
-        if (newTutorState.plan[newTutorState.currentStepIndex]) {
-          newTutorState.plan[newTutorState.currentStepIndex].status = 'active';
+        const nextIdx = idx + 1;
+        if (nextIdx < newTutorState.plan.length) {
+          newTutorState.currentStepIndex = nextIdx;
+          newTutorState.plan[nextIdx].status = 'active';
+        } else {
+          // Lesson finished
+          newTutorState.currentStepIndex = nextIdx;
         }
       }
     }
